@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LoveBox</title>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Lora:wght@400;500&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Lora', serif;
+  background: #f5f3f0;
+  color: #1a1a1a;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 2.5rem 1rem 5rem;
+}
+
+/* ── Header ── */
+.header { text-align: center; margin-bottom: 2rem; }
+.header h1 { font-size: 1.5rem; font-weight: 500; letter-spacing: -0.3px; }
+.header p  { font-size: 0.75rem; font-family: 'IBM Plex Mono', monospace; color: #999; margin-top: 3px; }
+
+/* ── Status ── */
+#status-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 0.7rem; font-family: 'IBM Plex Mono', monospace;
+  padding: 3px 10px; border-radius: 20px;
+  background: #ece9e4; color: #999;
+  margin-top: 0.5rem; margin-bottom: 2rem;
+  transition: all .3s;
+}
+#status-pill.connected { background: #e3f0e8; color: #2d7a45; }
+#status-pill.error     { background: #f5e8e8; color: #a03030; }
+#dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+/* ── Card ── */
+.card {
+  background: #fff;
+  border: 1px solid #e5e0d8;
+  border-radius: 12px;
+  padding: 1.5rem;
+  width: 100%; max-width: 460px;
+  margin-bottom: 1rem;
+}
+
+/* ── Tabs ── */
+.tabs {
+  display: flex; gap: 4px; margin-bottom: 1.4rem;
+  background: #f0ece6; padding: 3px; border-radius: 8px;
+}
+.tab {
+  flex: 1; padding: 0.4rem 0; border: none; background: transparent;
+  border-radius: 6px; font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.72rem; cursor: pointer; color: #999; transition: all .2s;
+}
+.tab.active { background: #fff; color: #1a1a1a; font-weight: 500; }
+.panel { display: none; } .panel.active { display: block; }
+
+/* ── OLED Preview ── */
+.oled-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-bottom: 1.1rem; }
+.oled-label { font-size: 0.65rem; font-family: 'IBM Plex Mono', monospace; color: #bbb; text-transform: uppercase; letter-spacing: 0.08em; }
+
+/* Cadre physique de l'écran : 26.7mm x 19mm soit ratio ~1.4:1 */
+.oled-frame {
+  background: #111;
+  border-radius: 5px;
+  padding: 7px 8px;
+  box-shadow: 0 0 0 1px #333, 0 4px 16px rgba(0,0,0,0.35);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+canvas.oled {
+  display: block;
+  width: 256px;  /* 128 px * 2 */
+  height: 128px; /* 64 px * 2  */
+  image-rendering: pixelated;
+  border-radius: 2px;
+}
+
+/* ── Inputs ── */
+textarea, input[type=text], input[type=time] {
+  width: 100%; border: 1px solid #e0dbd3; border-radius: 7px;
+  padding: 0.7rem 0.8rem; font-family: 'Lora', serif; font-size: 0.9rem;
+  background: #faf9f7; color: #1a1a1a; outline: none;
+  transition: border-color .2s;
+}
+textarea { height: 80px; resize: none; line-height: 1.6; }
+textarea:focus, input:focus { border-color: #aaa; }
+textarea::placeholder, input::placeholder { color: #ccc; }
+
+.char-count {
+  font-size: 0.65rem; font-family: 'IBM Plex Mono', monospace;
+  color: #ccc; text-align: right; margin-top: 4px;
+}
+
+/* ── Canvas dessin ── */
+#draw-canvas {
+  display: block;
+  /* canvas interne = 128x48 px, affiché 3x */
+  width: 384px; height: 144px;
+  background: #000;
+  border: 1px solid #e0dbd3;
+  border-radius: 7px;
+  cursor: crosshair;
+  touch-action: none;
+  image-rendering: pixelated;
+}
+
+.draw-tools { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 0.8rem; }
+.tool-btn {
+  background: #f0ece6; border: 1px solid #e0dbd3; border-radius: 5px;
+  padding: 4px 10px; font-size: 0.7rem; cursor: pointer;
+  color: #666; font-family: 'IBM Plex Mono', monospace; transition: all .15s;
+}
+.tool-btn:hover { background: #e8e3db; }
+.tool-btn.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+
+/* ── Bouton envoi ── */
+.send-btn {
+  width: 100%; padding: 0.7rem; margin-top: 0.9rem;
+  background: #1a1a1a; border: none; border-radius: 7px;
+  color: #fff; font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.8rem; font-weight: 500; letter-spacing: 0.4px;
+  cursor: pointer; transition: background .2s;
+}
+.send-btn:hover    { background: #333; }
+.send-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* ── Programmé ── */
+.sched-row { display: flex; gap: 8px; }
+.sched-row input[type=time] { flex: 0 0 auto; width: auto; }
+.sched-row input[type=text] { flex: 1; }
+#sched-status { font-size: 0.68rem; font-family: 'IBM Plex Mono', monospace; color: #999; margin-top: 6px; min-height: 16px; }
+
+/* ── Config ── */
+.config-row { margin-bottom: 0.8rem; }
+.config-row label { display: block; font-size: 0.65rem; font-family: 'IBM Plex Mono', monospace; color: #bbb; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+.config-note { font-size: 0.65rem; font-family: 'IBM Plex Mono', monospace; color: #bbb; margin-top: 4px; }
+.save-cfg-btn {
+  padding: 0.45rem 1rem; background: #fff; border: 1px solid #ccc;
+  border-radius: 6px; font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.72rem; cursor: pointer; color: #555; transition: all .2s;
+}
+.save-cfg-btn:hover { background: #f0ece6; }
+
+/* ── Toast ── */
+#toast {
+  position: fixed; bottom: 2rem; left: 50%;
+  transform: translateX(-50%) translateY(70px);
+  background: #1a1a1a; color: #fff; padding: 7px 16px;
+  border-radius: 20px; font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.72rem; transition: transform .3s cubic-bezier(0.34,1.56,0.64,1);
+  z-index: 99; white-space: nowrap; pointer-events: none;
+}
+#toast.show { transform: translateX(-50%) translateY(0); }
+
+.section-label {
+  font-size: 0.65rem; font-family: 'IBM Plex Mono', monospace;
+  color: #bbb; text-transform: uppercase; letter-spacing: 0.08em;
+  margin-bottom: 0.8rem; display: block;
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>LoveBox</h1>
+  <p>lovebox/message</p>
+  <div id="status-pill"><div id="dot"></div><span id="status-txt">Connexion…</span></div>
+</div>
+
+<div class="card">
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('text',this)">Texte</button>
+    <button class="tab"        onclick="switchTab('draw',this)">Dessin</button>
+    <button class="tab"        onclick="switchTab('sched',this)">Programmé</button>
+    <button class="tab"        onclick="switchTab('cfg',this)">Config</button>
+  </div>
+
+  <!-- TEXTE -->
+  <div id="tab-text" class="panel active">
+    <div class="oled-wrap">
+      <span class="oled-label">Aperçu OLED 0.96"</span>
+      <div class="oled-frame">
+        <canvas id="oled-text" class="oled" width="128" height="64"></canvas>
+      </div>
+    </div>
+    <textarea id="msg-input" maxlength="120"
+      placeholder="Écris ton message…"
+      oninput="updateOledText(this.value); updateCount()"></textarea>
+    <div class="char-count"><span id="char-n">0</span> / 120</div>
+    <button class="send-btn" onclick="sendText()">Envoyer</button>
+  </div>
+
+  <!-- DESSIN -->
+  <div id="tab-draw" class="panel">
+    <div class="oled-wrap">
+      <span class="oled-label">Aperçu OLED 0.96"</span>
+      <div class="oled-frame">
+        <canvas id="oled-draw" class="oled" width="128" height="64"></canvas>
+      </div>
+    </div>
+    <div class="draw-tools">
+      <button class="tool-btn active" id="tool-pen"   onclick="setTool('pen')">Crayon</button>
+      <button class="tool-btn"        id="tool-erase" onclick="setTool('erase')">Gomme</button>
+      <button class="tool-btn"        onclick="stampShape('heart')">Coeur</button>
+      <button class="tool-btn"        onclick="stampShape('star')">Etoile</button>
+      <button class="tool-btn"        onclick="clearCanvas()">Effacer</button>
+    </div>
+    <canvas id="draw-canvas" width="128" height="48"></canvas>
+    <button class="send-btn" onclick="sendDrawing()">Envoyer le dessin</button>
+  </div>
+
+  <!-- PROGRAMMÉ -->
+  <div id="tab-sched" class="panel">
+    <span class="section-label">Message automatique quotidien</span>
+    <div class="sched-row">
+      <input type="time" id="sched-time" value="08:00">
+      <input type="text" id="sched-msg"  placeholder="Bonjour mon coeur...">
+    </div>
+    <button class="send-btn" onclick="saveSched()">Activer</button>
+    <div id="sched-status"></div>
+  </div>
+
+  <!-- CONFIG -->
+  <div id="tab-cfg" class="panel">
+    <span class="section-label">Broker MQTT — HiveMQ Cloud</span>
+
+    <div class="config-row">
+      <label>Host</label>
+      <input id="cfg-host" type="text" placeholder="xxxxxxxx.s1.eu.hivemq.cloud">
+    </div>
+    <div class="config-row">
+      <label>Port WebSocket TLS</label>
+      <input id="cfg-port" type="text" value="8884">
+      <p class="config-note">
+        8884 = WebSocket TLS → utilisé par cette page web dans ton navigateur.<br>
+        8883 = MQTT TCP TLS → utilisé par l'ESP32 dans le firmware.
+        Les deux parlent au même broker HiveMQ, protocoles différents.
+      </p>
+    </div>
+    <div class="config-row">
+      <label>Utilisateur</label>
+      <input id="cfg-user" type="text" placeholder="lovebox">
+    </div>
+    <div class="config-row">
+      <label>Mot de passe</label>
+      <input id="cfg-pass" type="password">
+    </div>
+    <div class="config-row">
+      <label>Topic</label>
+      <input id="cfg-topic" type="text" value="lovebox/message">
+      <p class="config-note">Doit correspondre exactement au MQTT_TOPIC dans main.ino</p>
+    </div>
+    <button class="save-cfg-btn" onclick="saveCfg()">Sauvegarder et reconnecter</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ────────────────────────────────────────────────────────────────
+// Config locale (localStorage)
+// ────────────────────────────────────────────────────────────────
+const DEFAULT_CFG = { host:'', port:'8884', user:'', pass:'', topic:'lovebox/message' };
+let cfg = Object.assign({}, DEFAULT_CFG, JSON.parse(localStorage.getItem('lovebox_cfg') || '{}'));
+
+['host','port','user','pass','topic'].forEach(k => {
+  const el = document.getElementById('cfg-' + k);
+  if (el && cfg[k]) el.value = cfg[k];
+});
+
+function saveCfg() {
+  ['host','port','user','pass','topic'].forEach(k => {
+    cfg[k] = document.getElementById('cfg-' + k).value.trim();
+  });
+  localStorage.setItem('lovebox_cfg', JSON.stringify(cfg));
+  connectMQTT();
+  toast('Sauvegarde OK');
+}
+
+// ────────────────────────────────────────────────────────────────
+// MQTT
+// ────────────────────────────────────────────────────────────────
+let mqttClient = null;
+let connected  = false;
+
+function setStatus(cls, txt) {
+  document.getElementById('status-pill').className = cls;
+  document.getElementById('status-txt').textContent = txt;
+}
+
+function connectMQTT() {
+  if (mqttClient) { try { mqttClient.end(true); } catch(e) {} }
+  if (!cfg.host)  { setStatus('error', 'Config manquante'); return; }
+
+  setStatus('', 'Connexion…');
+  // wss:// = WebSocket TLS, port 8884 côté navigateur
+  const url = `wss://${cfg.host}:${cfg.port || 8884}/mqtt`;
+  mqttClient = mqtt.connect(url, {
+    username:        cfg.user,
+    password:        cfg.pass,
+    clientId:        'lovebox-web-' + Math.random().toString(16).slice(2, 8),
+    clean:           true,
+    reconnectPeriod: 4000,
+    connectTimeout:  10000,
+  });
+  mqttClient.on('connect',   () => { connected = true;  setStatus('connected', 'Connecté'); });
+  mqttClient.on('error',  e  => { connected = false; setStatus('error', 'Erreur'); console.error(e); });
+  mqttClient.on('offline',   () => { connected = false; setStatus('error', 'Hors ligne'); });
+  mqttClient.on('reconnect', () => setStatus('', 'Reconnexion…'));
+}
+
+connectMQTT();
+
+function publish(payload) {
+  if (!connected || !mqttClient) { toast('Non connecté — vérifie la config'); return false; }
+  mqttClient.publish(cfg.topic || 'lovebox/message', JSON.stringify(payload));
+  return true;
+}
+
+// ────────────────────────────────────────────────────────────────
+// Tabs
+// ────────────────────────────────────────────────────────────────
+function switchTab(name, btn) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+}
+
+function updateCount() {
+  document.getElementById('char-n').textContent =
+    document.getElementById('msg-input').value.length;
+}
+
+// ────────────────────────────────────────────────────────────────
+// OLED Preview — rendu réaliste SSD1306
+//
+// Canvas interne 128x64 (1px = 1 pixel OLED), affiché en CSS 2x.
+// - Pixels 0-15  → barre jaune (en vrai = pixels lumineux qui passent
+//                  à travers le filtre jaune de l'écran bicolore)
+// - Pixels 16-63 → zone bleue
+// Pas d'emoji, pas d'antialiasing : monospace pixelisé uniquement.
+// ────────────────────────────────────────────────────────────────
+const otextCanvas = document.getElementById('oled-text');
+const otx         = otextCanvas.getContext('2d');
+// imageSmoothing désactivé = rendu pixel-perfect même à la CSS 2x
+otx.imageSmoothingEnabled = false;
+
+function renderOledText(text) {
+  // Fond noir
+  otx.fillStyle = '#000';
+  otx.fillRect(0, 0, 128, 64);
+
+  // Barre jaune (pixels 0-15 = 16 lignes)
+  otx.fillStyle = '#d4a800';  // jaune OLED, pas trop saturé
+  otx.fillRect(0, 0, 128, 16);
+
+  // Texte barre jaune : couleur sombre (rendu inversé = texte noir sur fond jaune)
+  otx.fillStyle = '#000';
+  otx.font = '600 9px "IBM Plex Mono", monospace';
+  otx.fillText('LoveBox', 4, 12);
+
+  // Zone bleue (pixels 16-63 = 48 lignes)
+  otx.fillStyle = '#002fa0';  // bleu OLED typique
+  otx.fillRect(0, 16, 128, 48);
+
+  if (!text) {
+    otx.fillStyle = '#1a2a60';
+    otx.font = '8px "IBM Plex Mono", monospace';
+    otx.fillText('En attente...', 4, 36);
+    return;
+  }
+
+  // Wrapping : police 6x10, max ~20 chars/ligne, max 4 lignes
+  otx.fillStyle = '#ffffff';
+  otx.font = '9px "IBM Plex Mono", monospace';
+  const maxChars = 20;
+  const lines = [];
+  let tmp = '';
+  for (const ch of text) {
+    if (ch === '\n' || tmp.length >= maxChars) {
+      lines.push(tmp);
+      tmp = (ch === '\n') ? '' : ch;
+    } else {
+      tmp += ch;
+    }
+  }
+  if (tmp) lines.push(tmp);
+
+  lines.slice(0, 4).forEach((l, i) => {
+    otx.fillText(l, 4, 28 + i * 11);
+  });
+  if (lines.length > 4) {
+    otx.fillStyle = '#334488';
+    otx.fillText('...', 4, 28 + 4 * 11);
+  }
+}
+
+renderOledText('');
+
+function updateOledText(text) { renderOledText(text); }
+
+// OLED preview dessin
+const odrawCanvas = document.getElementById('oled-draw');
+const odx         = odrawCanvas.getContext('2d');
+odx.imageSmoothingEnabled = false;
+
+function renderOledDraw(srcCtx) {
+  odx.fillStyle = '#000';  odx.fillRect(0, 0, 128, 64);
+  odx.fillStyle = '#d4a800'; odx.fillRect(0, 0, 128, 16);
+  odx.fillStyle = '#000';
+  odx.font = '600 9px "IBM Plex Mono", monospace';
+  odx.fillText('Dessin', 4, 12);
+  odx.fillStyle = '#002fa0'; odx.fillRect(0, 16, 128, 48);
+
+  // Copie pixel par pixel : blanc si lumineux, ignoré sinon
+  const imgd = srcCtx.getImageData(0, 0, 128, 48);
+  for (let y = 0; y < 48; y++) {
+    for (let x = 0; x < 128; x++) {
+      const idx = (y * 128 + x) * 4;
+      if (imgd.data[idx] > 100 || imgd.data[idx+1] > 100 || imgd.data[idx+2] > 100) {
+        odx.fillStyle = '#ffffff';
+        odx.fillRect(x, 16 + y, 1, 1);
+      }
+    }
+  }
+}
+
+// ────────────────────────────────────────────────────────────────
+// Canvas dessin
+// ────────────────────────────────────────────────────────────────
+const dc   = document.getElementById('draw-canvas');
+const dctx = dc.getContext('2d');
+dctx.fillStyle = '#000';
+dctx.fillRect(0, 0, 128, 48);
+
+let drawing = false, tool = 'pen', lastPt = null;
+
+function setTool(t) {
+  tool = t;
+  document.querySelectorAll('[id^=tool-]').forEach(b => b.classList.remove('active'));
+  const el = document.getElementById('tool-' + t);
+  if (el) el.classList.add('active');
+}
+
+function getPos(e) {
+  const r  = dc.getBoundingClientRect();
+  const sx = dc.width  / r.width;
+  const sy = dc.height / r.height;
+  const src = e.touches ? e.touches[0] : e;
+  return {
+    x: Math.floor((src.clientX - r.left) * sx),
+    y: Math.floor((src.clientY - r.top)  * sy),
+  };
+}
+
+function drawDot(x, y) {
+  if (tool === 'pen')  { dctx.fillStyle = '#fff'; dctx.fillRect(x, y, 2, 2); }
+  else                 { dctx.fillStyle = '#000'; dctx.fillRect(x-2, y-2, 5, 5); }
+  renderOledDraw(dctx);
+}
+
+function drawLine(x0, y0, x1, y1) {
+  const dx = Math.abs(x1-x0), dy = Math.abs(y1-y0);
+  const sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+  let e = dx - dy;
+  while (true) {
+    drawDot(x0, y0);
+    if (x0 === x1 && y0 === y1) break;
+    const e2 = 2 * e;
+    if (e2 > -dy) { e -= dy; x0 += sx; }
+    if (e2 <  dx) { e += dx; y0 += sy; }
+  }
+}
+
+dc.addEventListener('mousedown',  e => { drawing = true; lastPt = getPos(e); drawDot(lastPt.x, lastPt.y); });
+dc.addEventListener('mousemove',  e => { if (!drawing) return; const p = getPos(e); drawLine(lastPt.x, lastPt.y, p.x, p.y); lastPt = p; });
+dc.addEventListener('mouseup',    () => { drawing = false; lastPt = null; });
+dc.addEventListener('mouseleave', () => { drawing = false; lastPt = null; });
+dc.addEventListener('touchstart', e => { e.preventDefault(); drawing = true; lastPt = getPos(e); drawDot(lastPt.x, lastPt.y); }, { passive: false });
+dc.addEventListener('touchmove',  e => { e.preventDefault(); if (!drawing) return; const p = getPos(e); drawLine(lastPt.x, lastPt.y, p.x, p.y); lastPt = p; }, { passive: false });
+dc.addEventListener('touchend',   e => { e.preventDefault(); drawing = false; lastPt = null; }, { passive: false });
+
+function clearCanvas() {
+  dctx.fillStyle = '#000';
+  dctx.fillRect(0, 0, 128, 48);
+  renderOledDraw(dctx);
+}
+
+// Formes pixel pré-définies
+const HEART_PX = [
+  [1,0],[2,0],[4,0],[5,0],
+  [0,1],[1,1],[2,1],[3,1],[4,1],[5,1],[6,1],
+  [0,2],[1,2],[2,2],[3,2],[4,2],[5,2],[6,2],
+  [1,3],[2,3],[3,3],[4,3],[5,3],
+  [2,4],[3,4],[4,4],
+  [3,5],
+];
+const STAR_PX = [
+  [3,0],[3,1],
+  [0,2],[1,2],[2,2],[3,2],[4,2],[5,2],[6,2],
+  [1,3],[2,3],[3,3],[4,3],[5,3],
+  [0,4],[2,4],[3,4],[4,4],[6,4],
+  [2,5],[4,5],
+];
+
+function stampShape(shape) {
+  const pts = shape === 'heart' ? HEART_PX : STAR_PX;
+  const ox = 58, oy = 20;
+  dctx.fillStyle = '#fff';
+  pts.forEach(([dx, dy]) => dctx.fillRect(ox + dx, oy + dy, 1, 1));
+  renderOledDraw(dctx);
+}
+
+// ────────────────────────────────────────────────────────────────
+// Envoi
+// ────────────────────────────────────────────────────────────────
+function sendText() {
+  const msg = document.getElementById('msg-input').value.trim();
+  if (!msg) { toast('Écris un message d\'abord'); return; }
+  if (publish({ type: 'text', content: msg })) {
+    toast('Envoyé');
+    document.getElementById('msg-input').value = '';
+    updateOledText('');
+    updateCount();
+  }
+}
+
+function sendDrawing() {
+  const imgd = dctx.getImageData(0, 0, 128, 48);
+  const buf  = new Array(128).fill(0);
+  for (let x = 0; x < 128; x++) {
+    for (let y = 0; y < 8; y++) {
+      const idx = (y * 128 + x) * 4;
+      if (imgd.data[idx] > 100 || imgd.data[idx+1] > 100 || imgd.data[idx+2] > 100)
+        buf[x] |= (1 << y);
+    }
+  }
+  if (publish({ type: 'draw', pixels: buf })) toast('Dessin envoyé');
+}
+
+// ────────────────────────────────────────────────────────────────
+// Messages programmés
+// ────────────────────────────────────────────────────────────────
+let schedInterval = null;
+
+function saveSched() {
+  const time = document.getElementById('sched-time').value;
+  const msg  = document.getElementById('sched-msg').value.trim();
+  if (!msg) { toast('Entre un message'); return; }
+  if (schedInterval) clearInterval(schedInterval);
+
+  localStorage.setItem('lovebox_sched', JSON.stringify({ time, msg, active: true }));
+
+  schedInterval = setInterval(() => {
+    const now  = new Date();
+    const hhmm = now.getHours().toString().padStart(2, '0') + ':' +
+                 now.getMinutes().toString().padStart(2, '0');
+    if (hhmm === time && now.getSeconds() < 5)
+      publish({ type: 'text', content: msg });
+  }, 4000);
+
+  document.getElementById('sched-status').textContent =
+    'Actif — envoi chaque jour a ' + time;
+  toast('Programme a ' + time);
+}
+
+const savedSched = JSON.parse(localStorage.getItem('lovebox_sched') || 'null');
+if (savedSched?.active) {
+  document.getElementById('sched-time').value = savedSched.time;
+  document.getElementById('sched-msg').value  = savedSched.msg;
+  saveSched();
+}
+
+// ────────────────────────────────────────────────────────────────
+// Toast
+// ────────────────────────────────────────────────────────────────
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2500);
+}
+</script>
+</body>
+</html>
