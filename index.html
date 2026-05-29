@@ -536,13 +536,23 @@ function sendText() {
 }
 
 function sendDrawing() {
+  // Le canvas interne fait 128x48 px.
+  // L'OLED zone dessin fait 128x32 px (4 pages de 8 bits = 32 lignes).
+  // On envoie 512 bytes : 4 pages * 128 colonnes.
+  // Chaque byte = 1 colonne de 8 pixels, page 0 = lignes 0-7, page 1 = 8-15, etc.
   const imgd = dctx.getImageData(0, 0, 128, 48);
-  const buf  = new Array(128).fill(0);
-  for (let x = 0; x < 128; x++) {
-    for (let y = 0; y < 8; y++) {
-      const idx = (y * 128 + x) * 4;
-      if (imgd.data[idx] > 100 || imgd.data[idx+1] > 100 || imgd.data[idx+2] > 100)
-        buf[x] |= (1 << y);
+  const PAGES = 4;
+  const buf = new Array(128 * PAGES).fill(0);
+  for (let page = 0; page < PAGES; page++) {
+    for (let x = 0; x < 128; x++) {
+      let byte = 0;
+      for (let bit = 0; bit < 8; bit++) {
+        const y   = page * 8 + bit;
+        const idx = (y * 128 + x) * 4;
+        if (y < 48 && (imgd.data[idx] > 100 || imgd.data[idx+1] > 100 || imgd.data[idx+2] > 100))
+          byte |= (1 << bit);
+      }
+      buf[page * 128 + x] = byte;
     }
   }
   if (publish({ type: 'draw', pixels: buf })) toast('Dessin envoyé');
